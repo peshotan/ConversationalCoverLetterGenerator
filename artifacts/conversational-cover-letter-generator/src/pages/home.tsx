@@ -22,12 +22,6 @@ import {
   type CoverLetterResult,
   type CoverLetterSection,
 } from "@workspace/api-client-react";
-import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
-import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-
-GlobalWorkerOptions.workerSrc = pdfWorker;
-
-type PdfTextItem = { str: string; hasEOL?: boolean };
 
 type FormState = {
   resumeText: string;
@@ -51,6 +45,13 @@ const initialForm: FormState = {
   extraContext: "",
 };
 
+const MAX_RESUME_PDF_BYTES = 8 * 1024 * 1024;
+
+type ResumePdf = {
+  base64: string;
+  fileName: string;
+};
+
 const toneOptions: Array<{ value: FormState["tone"]; label: string; description: string }> = [
   { value: "warm", label: "Warm", description: "Human and thoughtful" },
   { value: "professional", label: "Professional", description: "Polished and measured" },
@@ -68,6 +69,18 @@ function countWords(value: string) {
   return value.trim() ? value.trim().split(/\s+/).length : 0;
 }
 
+async function readPdfAsBase64(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const chunks: string[] = [];
+
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(index, index + 0x8000)));
+  }
+
+  return btoa(chunks.join(""));
+}
+
 function sectionTitle(name: CoverLetterSection["name"]) {
   if (name === "opening") return "Opening";
   if (name === "evidence") return "Relevant evidence";
@@ -77,33 +90,6 @@ function sectionTitle(name: CoverLetterSection["name"]) {
 function formatError(error: unknown) {
   const possibleError = error as { response?: { data?: { error?: string } }; message?: string };
   return possibleError.response?.data?.error || possibleError.message || "Something got in the way. Please try again.";
-}
-
-async function extractPdfText(buffer: ArrayBuffer) {
-  const document = await getDocument({ data: new Uint8Array(buffer) }).promise;
-  const pages: string[] = [];
-
-  try {
-    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
-      const page = await document.getPage(pageNumber);
-      const content = await page.getTextContent();
-      let pageText = "";
-
-      for (const item of content.items) {
-        if ("str" in item) {
-          const textItem = item as PdfTextItem;
-          pageText += `${textItem.str}${textItem.hasEOL ? "\n" : " "}`;
-        }
-      }
-
-      pages.push(pageText.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim());
-      page.cleanup();
-    }
-  } finally {
-    document.cleanup();
-  }
-
-  return pages.filter(Boolean).join("\n\n");
 }
 
 function StatusMark() {
@@ -310,40 +296,50 @@ export default function Home() {
   const [form, setForm] = useState<FormState>(initialForm);
   const [result, setResult] = useState<CoverLetterResult | null>(null);
   const [error, setError] = useState("");
-  const [fileName, setFileName] = useState("");
+  const [resumePdf, setResumePdf] = useState<ResumePdf | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const generateCoverLetter = useGenerateCoverLetter();
 
-  const canSubmit = useMemo(() => form.resumeText.trim().length >= 80 && form.jobDescription.trim().length >= 80, [form.resumeText, form.jobDescription]);
+  const hasResumeSource = form.resumeText.trim().length >= 80 || resumePdf !== null;
+  const canSubmit = useMemo(() => hasResumeSource && form.jobDescription.trim().length >= 80, [hasResumeSource, form.jobDescription]);
   const updateField = <K extends keyof FormState>(field: K, value: FormState[K]) => setForm((current) => ({ ...current, [field]: value }));
 
   const handleFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    setFileName(file.name);
-    try {
-      const text = file.type === "text/plain" || file.name.toLowerCase().endsWith(".txt")
-        ? await file.text()
-        : await extractPdfText(await file.arrayBuffer());
-      if (text.trim().length > 20) {
-        updateField("resumeText", text);
-      } else {
-        setError("This PDF has no selectable text. Paste the resume text below so the editor can work from the actual details.");
-      }
-    } catch {
-      setError("We couldn’t read that file in the browser. Paste the resume text below instead.");
+
+    setError("");
+    if (file.type === "text/plain" || file.name.toLowerCase().endsWith(".txt")) {
+      updateField("resumeText", await file.text());
+      setResumePdf(null);
+      return;
     }
+
+    if (!(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))) {
+      setError("Upload a PDF resume or a plain-text file.");
+      return;
+    }
+
+    if (file.size === 0 || file.size > MAX_RESUME_PDF_BYTES) {
+      setError("Choose a PDF that is smaller than 8 MB.");
+      return;
+    }
+
+    setResumePdf({ base64: await readPdfAsBase64(file), fileName: file.name });
+    updateField("resumeText", "");
   };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
     if (!canSubmit) {
-      setError("Add at least 80 characters to both your resume and the job description before generating.");
+      setError("Add a PDF or at least 80 characters of resume text, plus at least 80 characters of job description.");
       return;
     }
     const payload: CoverLetterInput = {
-      resumeText: form.resumeText.trim(),
+      resumeText: form.resumeText.trim() || null,
+      resumePdfBase64: resumePdf?.base64 ?? null,
+      resumePdfFileName: resumePdf?.fileName ?? null,
       jobDescription: form.jobDescription.trim(),
       companyName: form.companyName.trim() || null,
       roleTitle: form.roleTitle.trim() || null,
@@ -362,7 +358,7 @@ export default function Home() {
     setForm(initialForm);
     setResult(null);
     setError("");
-    setFileName("");
+    setResumePdf(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -423,12 +419,12 @@ export default function Home() {
 
             <div className="space-y-6">
               <div>
-                <div className="mb-2 flex items-center justify-between"><FieldLabel htmlFor="resume-text">Your resume</FieldLabel><TextCount value={form.resumeText} minimum={80} /></div>
-                <textarea id="resume-text" value={form.resumeText} onChange={(event) => updateField("resumeText", event.target.value)} placeholder="Paste the text from your resume here…" className="min-h-[160px] w-full resize-y rounded-xl border border-[hsl(var(--input))] bg-[hsl(var(--background)/0.62)] p-3.5 text-sm leading-6 outline-none transition-shadow placeholder:text-[hsl(var(--muted-foreground)/0.75)] focus:border-[hsl(var(--accent-foreground))] focus:ring-4 focus:ring-[hsl(var(--accent)/0.14)]" data-testid="textarea-resume" />
+                <div className="mb-2 flex items-center justify-between"><FieldLabel htmlFor="resume-text">Your resume</FieldLabel>{resumePdf ? <span className="font-mono text-[10px] text-[hsl(var(--accent-foreground))]">PDF ready for AI</span> : <TextCount value={form.resumeText} minimum={80} />}</div>
+                <textarea id="resume-text" value={form.resumeText} onChange={(event) => updateField("resumeText", event.target.value)} placeholder={resumePdf ? "Your PDF will be read directly by AI. Remove it to paste text instead…" : "Paste the text from your resume here…"} className="min-h-[160px] w-full resize-y rounded-xl border border-[hsl(var(--input))] bg-[hsl(var(--background)/0.62)] p-3.5 text-sm leading-6 outline-none transition-shadow placeholder:text-[hsl(var(--muted-foreground)/0.75)] focus:border-[hsl(var(--accent-foreground))] focus:ring-4 focus:ring-[hsl(var(--accent)/0.14)]" data-testid="textarea-resume" />
                 <input ref={fileInputRef} type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={handleFile} className="hidden" data-testid="input-resume-file" />
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <button type="button" onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-1.5 text-xs font-semibold text-[hsl(var(--primary))] transition-colors hover:text-[hsl(var(--accent-foreground))]" data-testid="button-upload-resume"><Upload size={14} /> Upload PDF or text</button>
-                  {fileName && <span className="flex min-w-0 items-center gap-1 text-[11px] text-[hsl(var(--muted-foreground))]" data-testid="text-uploaded-file"><FileText size={12} /><span className="truncate">{fileName}</span><button type="button" onClick={() => { setFileName(""); updateField("resumeText", ""); if (fileInputRef.current) fileInputRef.current.value = ""; }} aria-label="Remove uploaded resume" data-testid="button-remove-file"><X size={13} /></button></span>}
+                  {resumePdf && <span className="flex min-w-0 items-center gap-1 text-[11px] text-[hsl(var(--muted-foreground))]" data-testid="text-uploaded-file"><FileText size={12} /><span className="truncate">{resumePdf.fileName}</span><button type="button" onClick={() => { setResumePdf(null); if (fileInputRef.current) fileInputRef.current.value = ""; }} aria-label="Remove uploaded resume" data-testid="button-remove-file"><X size={13} /></button></span>}
                 </div>
               </div>
 

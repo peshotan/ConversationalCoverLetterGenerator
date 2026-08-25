@@ -19,6 +19,25 @@ describe("cover letter API contract", () => {
     expect(GenerateCoverLetterBody.safeParse({ ...validInput, jobDescription: "too short" }).success).toBe(false);
   });
 
+  it("accepts a bounded PDF payload without pasted resume text", () => {
+    const result = GenerateCoverLetterBody.safeParse({
+      resumeText: null,
+      resumePdfBase64: "JVBERi0xLjQ=",
+      resumePdfFileName: "resume.pdf",
+      jobDescription: "B".repeat(80),
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects malformed PDF payloads", () => {
+    expect(GenerateCoverLetterBody.safeParse({
+      resumeText: null,
+      resumePdfBase64: "this is not base64",
+      jobDescription: "B".repeat(80),
+    }).success).toBe(false);
+  });
+
   it("rejects unsupported section names in generated responses", () => {
     const response = {
       letter: "Draft",
