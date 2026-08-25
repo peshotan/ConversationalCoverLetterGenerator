@@ -4,49 +4,9 @@ import {
   GenerateCoverLetterResponse,
 } from "@workspace/api-zod";
 import { openai } from "@workspace/integrations-openai-ai-server";
+import { findUnsupportedEvidence } from "../lib/cover-letter-utils";
 
 const router: IRouter = Router();
-
-const STOP_WORDS = new Set([
-  "about", "above", "after", "again", "against", "being", "below", "could",
-  "from", "have", "into", "more", "most", "other", "over", "their", "there",
-  "these", "they", "this", "those", "through", "under", "using", "what",
-  "when", "where", "which", "while", "with", "would", "your", "looking",
-  "software", "engineer", "build", "reliable", "application", "applications",
-  "experience", "team", "teams", "role", "work", "will", "you",
-]);
-
-function cleanSentence(value: string): string {
-  return value.replace(/\s+/g, " ").replace(/^[•\-–—\s]+/, "").trim();
-}
-
-function findEvidence(resume: string, keywords: string[]): string[] {
-  const lines = resume
-    .split(/\r?\n/)
-    .map(cleanSentence)
-    .filter((line) => line.length > 24);
-
-  return keywords
-    .flatMap((keyword) => lines.filter((line) => line.toLowerCase().includes(keyword)))
-    .filter((line, index, all) => all.indexOf(line) === index)
-    .slice(0, 3);
-}
-
-function extractKeywords(jobDescription: string): string[] {
-  return [...new Set(
-    jobDescription
-      .toLowerCase()
-      .replace(/[^a-z0-9+#\s-]/g, " ")
-      .split(/\s+/)
-      .filter((word) => word.length >= 5 && !STOP_WORDS.has(word)),
-  )].slice(0, 8);
-}
-
-function firstName(resume: string): string | null {
-  const firstLine = resume.split(/\r?\n/).map(cleanSentence).find(Boolean);
-  if (!firstLine || firstLine.includes("@") || firstLine.length > 80) return null;
-  return firstLine.split(/\s+/)[0] ?? null;
-}
 
 router.post("/cover-letter/generate", async (req, res) => {
   const parsed = GenerateCoverLetterBody.safeParse(req.body);
@@ -118,10 +78,7 @@ Use only the section names opening, evidence, and closing. Requirements should b
       return;
     }
 
-    const resumeLower = input.resumeText.toLowerCase();
-    const unsupportedEvidence = validated.data.sections
-      .flatMap((section) => section.evidence)
-      .filter((evidence) => !resumeLower.includes(evidence.toLowerCase()));
+    const unsupportedEvidence = findUnsupportedEvidence(validated.data.sections, input.resumeText);
     const warnings = [
       "AI-generated draft: review every claim before sending.",
       ...validated.data.warnings,
