@@ -12,8 +12,22 @@ export interface CoverLetterInput {
   /**
      * @minLength 80
      * @maxLength 30000
+     * @nullable
      */
-  resumeText: string;
+  resumeText?: string | null;
+  /**
+     * Base64-encoded PDF used only for this generation request.
+     * @minLength 4
+     * @maxLength 11184812
+     * @nullable
+     * @pattern ^[A-Za-z0-9+/]+={0,2}$
+     */
+  resumePdfBase64?: string | null;
+  /**
+     * @maxLength 255
+     * @nullable
+     */
+  resumePdfFileName?: string | null;
   /**
      * @minLength 80
      * @maxLength 20000

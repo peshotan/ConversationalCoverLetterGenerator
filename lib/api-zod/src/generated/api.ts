@@ -24,6 +24,13 @@ export const HealthCheckResponse = zod.object({
 export const generateCoverLetterBodyResumeTextMin = 80;
 export const generateCoverLetterBodyResumeTextMax = 30000;
 
+export const generateCoverLetterBodyResumePdfBase64Min = 4;
+export const generateCoverLetterBodyResumePdfBase64Max = 11184812;
+
+
+export const generateCoverLetterBodyResumePdfBase64RegExp = new RegExp('^[A-Za-z0-9+/]+={0,2}$');
+export const generateCoverLetterBodyResumePdfFileNameMax = 255;
+
 export const generateCoverLetterBodyJobDescriptionMin = 80;
 export const generateCoverLetterBodyJobDescriptionMax = 20000;
 
@@ -40,7 +47,9 @@ export const generateCoverLetterBodyExtraContextMax = 3000;
 
 
 export const GenerateCoverLetterBody = zod.object({
-  "resumeText": zod.string().min(generateCoverLetterBodyResumeTextMin).max(generateCoverLetterBodyResumeTextMax),
+  "resumeText": zod.string().min(generateCoverLetterBodyResumeTextMin).max(generateCoverLetterBodyResumeTextMax).nullish(),
+  "resumePdfBase64": zod.string().min(generateCoverLetterBodyResumePdfBase64Min).max(generateCoverLetterBodyResumePdfBase64Max).regex(generateCoverLetterBodyResumePdfBase64RegExp).nullish().describe('Base64-encoded PDF used only for this generation request.'),
+  "resumePdfFileName": zod.string().max(generateCoverLetterBodyResumePdfFileNameMax).nullish(),
   "jobDescription": zod.string().min(generateCoverLetterBodyJobDescriptionMin).max(generateCoverLetterBodyJobDescriptionMax),
   "companyName": zod.string().max(generateCoverLetterBodyCompanyNameMax).nullish(),
   "roleTitle": zod.string().max(generateCoverLetterBodyRoleTitleMax).nullish(),
