@@ -1,0 +1,153 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: cover-letter
+    description: Evidence-grounded cover letter generation
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /cover-letter/generate:
+    post:
+      operationId: generateCoverLetter
+      tags: [cover-letter]
+      summary: Generate a tailored cover letter
+      description: Creates an editable cover letter grounded in the supplied resume and job description.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CoverLetterInput"
+      responses:
+        "200":
+          description: Generated cover letter and supporting evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CoverLetterResult"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Generation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    CoverLetterInput:
+      type: object
+      required:
+        - resumeText
+        - jobDescription
+      properties:
+        resumeText:
+          type: string
+          minLength: 80
+          maxLength: 30000
+        jobDescription:
+          type: string
+          minLength: 80
+          maxLength: 20000
+        companyName:
+          type: [string, "null"]
+          maxLength: 160
+        roleTitle:
+          type: [string, "null"]
+          maxLength: 160
+        recipientName:
+          type: [string, "null"]
+          maxLength: 160
+        tone:
+          type: string
+          enum: [professional, warm, confident, direct]
+          default: professional
+        length:
+          type: string
+          enum: [concise, standard, detailed]
+          default: standard
+        extraContext:
+          type: [string, "null"]
+          maxLength: 3000
+    CoverLetterSection:
+      type: object
+      required:
+        - name
+        - text
+        - evidence
+        - requirements
+      properties:
+        name:
+          type: string
+          enum: [opening, evidence, closing]
+        text:
+          type: string
+        evidence:
+          type: array
+          items:
+            type: string
+        requirements:
+          type: array
+          items:
+            type: string
+    CoverLetterResult:
+      type: object
+      required:
+        - letter
+        - sections
+        - warnings
+        - missingEvidence
+      properties:
+        letter:
+          type: string
+        sections:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoverLetterSection"
+        warnings:
+          type: array
+          items:
+            type: string
+        missingEvidence:
+          type: array
+          items:
+            type: string
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+
