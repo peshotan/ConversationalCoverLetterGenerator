@@ -22,6 +22,12 @@ import {
   type CoverLetterResult,
   type CoverLetterSection,
 } from "@workspace/api-client-react";
+import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
+import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+
+GlobalWorkerOptions.workerSrc = pdfWorker;
+
+type PdfTextItem = { str: string; hasEOL?: boolean };
 
 type FormState = {
   resumeText: string;
@@ -73,14 +79,31 @@ function formatError(error: unknown) {
   return possibleError.response?.data?.error || possibleError.message || "Something got in the way. Please try again.";
 }
 
-function extractPdfText(buffer: ArrayBuffer) {
-  const decoded = new TextDecoder("latin1").decode(buffer);
-  const fragments = decoded.match(/[A-Za-z][A-Za-z0-9,.;:'"()/%&+\- ]{18,}/g) || [];
-  return fragments
-    .map((fragment) => fragment.replace(/\s+/g, " ").trim())
-    .filter((fragment) => !fragment.includes("endstream") && !fragment.includes("obj"))
-    .slice(0, 120)
-    .join("\n");
+async function extractPdfText(buffer: ArrayBuffer) {
+  const document = await getDocument({ data: new Uint8Array(buffer) }).promise;
+  const pages: string[] = [];
+
+  try {
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent();
+      let pageText = "";
+
+      for (const item of content.items) {
+        if ("str" in item) {
+          const textItem = item as PdfTextItem;
+          pageText += `${textItem.str}${textItem.hasEOL ? "\n" : " "}`;
+        }
+      }
+
+      pages.push(pageText.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim());
+      page.cleanup();
+    }
+  } finally {
+    document.cleanup();
+  }
+
+  return pages.filter(Boolean).join("\n\n");
 }
 
 function StatusMark() {
@@ -301,7 +324,7 @@ export default function Home() {
     try {
       const text = file.type === "text/plain" || file.name.toLowerCase().endsWith(".txt")
         ? await file.text()
-        : extractPdfText(await file.arrayBuffer());
+        : await extractPdfText(await file.arrayBuffer());
       if (text.trim().length > 20) {
         updateField("resumeText", text);
       } else {
