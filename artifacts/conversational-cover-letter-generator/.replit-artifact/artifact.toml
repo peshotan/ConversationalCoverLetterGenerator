@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Conversational Cover Letter Generator"
+description = "A focused writing assistant for job seekers that turns a pasted or uploaded resume and a job description into an evidence-grounded, editable cover letter."
+version = "1.0.0"
+id = "artifacts/conversational-cover-letter-generator"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22475
+
+[services.development]
+run = "pnpm --filter @workspace/conversational-cover-letter-generator run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/conversational-cover-letter-generator", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/conversational-cover-letter-generator/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22475"
+BASE_PATH = "/"
