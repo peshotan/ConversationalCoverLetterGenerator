@@ -81,7 +81,7 @@ Use only the section names opening, evidence, and closing. Requirements should b
 
   try {
     const completion = await openai.chat.completions.create({
-      model: "gpt-5.6-terra",
+      model: "gpt-5-nano",
       max_completion_tokens: 8192,
       response_format: { type: "json_object" },
       messages: [
