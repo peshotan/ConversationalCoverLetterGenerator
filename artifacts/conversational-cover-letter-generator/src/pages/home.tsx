@@ -1,15 +1,18 @@
-import { useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   ArrowDownToLine,
   ArrowRight,
   Check,
   CheckCircle2,
   Clipboard,
+  Clock3,
   FileText,
+  History,
   Info,
   LoaderCircle,
   RotateCcw,
   Sparkles,
+  Trash2,
   Upload,
   WandSparkles,
   X,
@@ -22,6 +25,13 @@ import {
   type CoverLetterResult,
   type CoverLetterSection,
 } from "@workspace/api-client-react";
+import { useDraftHistory } from "@/hooks/use-draft-history";
+import {
+  draftToResult,
+  serializeDraft,
+  type DraftFormMetadata,
+  type DraftRecord,
+} from "@/lib/draft-history";
 
 type FormState = {
   resumeText: string;
@@ -124,6 +134,142 @@ function TextCount({ value, minimum }: { value: string; minimum: number }) {
   );
 }
 
+function HistoryButton({ count, onClick }: { count: number; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="relative inline-flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.76)] px-3.5 py-2 text-sm font-semibold text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--secondary))]"
+      data-testid="button-open-history"
+    >
+      <History size={15} />
+      History
+      {count > 0 && (
+        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[hsl(var(--accent))] px-1.5 font-mono text-[10px] text-[hsl(var(--accent-foreground))]" data-testid="text-history-count">
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function formatHistoryDate(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
+}
+
+function HistoryPanel({
+  drafts,
+  isLoading,
+  isAvailable,
+  error,
+  onClose,
+  onOpenDraft,
+  onDeleteDraft,
+  onClear,
+}: {
+  drafts: DraftRecord[];
+  isLoading: boolean;
+  isAvailable: boolean;
+  error: string;
+  onClose: () => void;
+  onOpenDraft: (draft: DraftRecord) => void;
+  onDeleteDraft: (id: string) => void;
+  onClear: () => void;
+}) {
+  if (!isAvailable || isLoading || drafts.length === 0) {
+    return (
+      <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-labelledby="history-title">
+        <button type="button" className="absolute inset-0 cursor-default bg-[hsl(var(--foreground)/0.2)]" onClick={onClose} aria-label="Close history" />
+        <aside className="relative flex h-full w-full max-w-md flex-col border-l border-[hsl(var(--border))] bg-[hsl(var(--background))] p-5 shadow-2xl sm:p-7">
+          <HistoryPanelHeader onClose={onClose} onClear={onClear} hasDrafts={drafts.length > 0} />
+          {isLoading ? (
+            <div className="flex flex-1 items-center justify-center text-sm text-[hsl(var(--muted-foreground))]" data-testid="status-history-loading">
+              Loading your local drafts…
+            </div>
+          ) : !isAvailable ? (
+            <div className="mt-8 rounded-2xl border border-[hsl(36_74%_61%/0.5)] bg-[hsl(36_74%_61%/0.12)] p-5" data-testid="alert-history-unavailable">
+              <div className="flex items-start gap-3">
+                <Clock3 size={18} className="mt-0.5 shrink-0 text-[hsl(30_52%_30%)]" />
+                <div>
+                  <h3 className="font-semibold">History is unavailable</h3>
+                  <p className="mt-1 text-sm leading-6 text-[hsl(var(--muted-foreground))]">
+                    This browser does not allow local storage right now. You can still generate, edit, copy, and download letters, but new drafts cannot be saved here.
+                  </p>
+                  {error && <p className="mt-3 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{error}</p>}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center px-6 text-center" data-testid="empty-history">
+              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[hsl(var(--secondary))] text-[hsl(var(--primary))]"><History size={24} /></div>
+              <h3 className="font-serif text-3xl">No saved drafts yet.</h3>
+              <p className="mt-2 max-w-xs text-sm leading-6 text-[hsl(var(--muted-foreground))]">Generate a letter and it will appear here automatically. History stays in this browser only.</p>
+            </div>
+          )}
+        </aside>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-labelledby="history-title">
+      <button type="button" className="absolute inset-0 cursor-default bg-[hsl(var(--foreground)/0.2)]" onClick={onClose} aria-label="Close history" />
+      <aside className="relative flex h-full w-full max-w-md flex-col border-l border-[hsl(var(--border))] bg-[hsl(var(--background))] p-5 shadow-2xl sm:p-7">
+        <HistoryPanelHeader onClose={onClose} onClear={onClear} hasDrafts />
+        <div className="mt-6 flex-1 space-y-3 overflow-y-auto pr-1" data-testid="list-history-drafts">
+          {drafts.map((draft) => (
+            <div key={draft.id} className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.8)] p-4 transition-colors hover:bg-[hsl(var(--secondary)/0.5)]">
+              <div className="flex items-start justify-between gap-3">
+                <button type="button" onClick={() => onOpenDraft(draft)} className="min-w-0 flex-1 text-left" data-testid={`button-open-draft-${draft.id}`}>
+                  <span className="block truncate font-serif text-2xl text-[hsl(var(--foreground))]">{draft.form.roleTitle || "Untitled role"}</span>
+                  <span className="mt-1 block truncate text-sm text-[hsl(var(--muted-foreground))]">{draft.form.companyName || "No company specified"}</span>
+                </button>
+                <button type="button" onClick={() => onDeleteDraft(draft.id)} className="rounded-lg p-2 text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--destructive)/0.1)] hover:text-[hsl(var(--destructive))]" aria-label={`Delete ${draft.form.roleTitle || "untitled"} draft`} data-testid={`button-delete-draft-${draft.id}`}>
+                  <Trash2 size={15} />
+                </button>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-[hsl(var(--muted-foreground))]">
+                <span className="rounded-full bg-[hsl(var(--secondary))] px-2 py-1">{draft.form.useAiGeneratedContent ? "AI-assisted" : "Evidence-based"}</span>
+                <span>{formatHistoryDate(draft.updatedAt)}</span>
+              </div>
+              <button type="button" onClick={() => onOpenDraft(draft)} className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-[hsl(var(--primary))] hover:underline">
+                Reopen draft <ArrowRight size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <p className="mt-5 border-t border-[hsl(var(--border))] pt-4 text-[11px] leading-5 text-[hsl(var(--muted-foreground))]">Local history is private to this browser origin. It is not synced to an account or sent to the server.</p>
+      </aside>
+    </div>
+  );
+}
+
+function HistoryPanelHeader({ onClose, onClear, hasDrafts }: { onClose: () => void; onClear: () => void; hasDrafts: boolean }) {
+  const handleClear = () => {
+    if (window.confirm("Clear all saved drafts from this browser?")) onClear();
+  };
+
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-[hsl(var(--border))] pb-5">
+      <div>
+        <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[hsl(var(--accent-foreground))]">Your workspace</p>
+        <h2 id="history-title" className="mt-1 font-serif text-3xl">Draft history</h2>
+        <p className="mt-2 text-xs leading-5 text-[hsl(var(--muted-foreground))]">Saved locally, never regenerated.</p>
+      </div>
+      <div className="flex items-center gap-1">
+        {hasDrafts && <button type="button" onClick={handleClear} className="rounded-lg p-2 text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--destructive)/0.1)] hover:text-[hsl(var(--destructive))]" aria-label="Clear all saved drafts" data-testid="button-clear-history"><Trash2 size={15} /></button>}
+        <button type="button" onClick={onClose} className="rounded-lg p-2 text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--secondary))] hover:text-[hsl(var(--foreground))]" aria-label="Close history" data-testid="button-close-history"><X size={17} /></button>
+      </div>
+    </div>
+  );
+}
+
 function EmptyDesk({ onStart }: { onStart: () => void }) {
   return (
     <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-dashed border-[hsl(var(--border))] bg-[hsl(var(--card)/0.5)] px-6 py-14 text-center">
@@ -174,10 +320,14 @@ function SourcePill({ children }: { children: string }) {
   );
 }
 
-function ResultView({ result, input, onReset }: { result: CoverLetterResult; input: FormState; onReset: () => void }) {
+function ResultView({ result, input, onReset, onLetterChange, onLetterBlur }: { result: CoverLetterResult; input: FormState; onReset: () => void; onLetterChange: (value: string) => void; onLetterBlur: (value: string) => void }) {
   const [letter, setLetter] = useState(result.letter);
   const [copied, setCopied] = useState(false);
   const [showSources, setShowSources] = useState(true);
+
+  useEffect(() => {
+    setLetter(result.letter);
+  }, [result.letter]);
 
   const handleCopy = async () => {
     await navigator.clipboard?.writeText(letter);
@@ -232,7 +382,11 @@ function ResultView({ result, input, onReset }: { result: CoverLetterResult; inp
           </div>
           <textarea
             value={letter}
-            onChange={(event) => setLetter(event.target.value)}
+            onChange={(event) => {
+              setLetter(event.target.value);
+              onLetterChange(event.target.value);
+            }}
+            onBlur={() => onLetterBlur(letter)}
             className="min-h-[570px] w-full resize-y border-0 bg-transparent font-serif text-[19px] leading-[1.78] text-[hsl(var(--foreground))] outline-none placeholder:text-[hsl(var(--muted-foreground))] sm:text-[20px]"
             data-testid="textarea-generated-letter"
             aria-label="Editable generated cover letter"
@@ -299,8 +453,12 @@ export default function Home() {
   const [result, setResult] = useState<CoverLetterResult | null>(null);
   const [error, setError] = useState("");
   const [resumePdf, setResumePdf] = useState<ResumePdf | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editSaveTimeoutRef = useRef<number | null>(null);
   const generateCoverLetter = useGenerateCoverLetter();
+  const history = useDraftHistory();
 
   const hasResumeSource = form.useAiGeneratedContent
     ? form.resumeText.trim().length >= 80 || resumePdf !== null
@@ -358,16 +516,101 @@ export default function Home() {
       useAiGeneratedContent: form.useAiGeneratedContent,
     };
     generateCoverLetter.mutate({ data: payload }, {
-      onSuccess: (generated) => setResult(generated),
+      onSuccess: (generated) => {
+        setResult(generated);
+        const safeForm: DraftFormMetadata = {
+          companyName: form.companyName.trim(),
+          roleTitle: form.roleTitle.trim(),
+          recipientName: form.recipientName.trim(),
+          tone: form.tone,
+          length: form.length,
+          useAiGeneratedContent: form.useAiGeneratedContent,
+        };
+        const draft = serializeDraft({ result: generated, letter: generated.letter, form: safeForm });
+        setActiveDraftId(draft.id);
+        void history.save(draft)
+          .then((saved) => setActiveDraftId(saved.id))
+          .catch(() => {
+            // The generated result remains usable when browser storage is unavailable.
+          });
+      },
       onError: (requestError) => setError(formatError(requestError)),
     });
   };
 
+  const persistLetter = (draftId: string | null, letter: string) => {
+    if (!draftId) return;
+    void history.update(draftId, { letter }).catch(() => {
+      // The editable result remains usable when a later storage write fails.
+    });
+  };
+
+  const handleLetterChange = (letter: string) => {
+    if (!activeDraftId) return;
+    if (editSaveTimeoutRef.current !== null) window.clearTimeout(editSaveTimeoutRef.current);
+    editSaveTimeoutRef.current = window.setTimeout(() => {
+      persistLetter(activeDraftId, letter);
+      editSaveTimeoutRef.current = null;
+    }, 500);
+  };
+
+  const handleLetterBlur = (letter: string) => {
+    if (editSaveTimeoutRef.current !== null) {
+      window.clearTimeout(editSaveTimeoutRef.current);
+      editSaveTimeoutRef.current = null;
+    }
+    persistLetter(activeDraftId, letter);
+  };
+
+  const openDraft = (draft: DraftRecord) => {
+    if (editSaveTimeoutRef.current !== null) {
+      window.clearTimeout(editSaveTimeoutRef.current);
+      editSaveTimeoutRef.current = null;
+    }
+    setForm((current) => ({
+      ...current,
+      resumeText: "",
+      jobDescription: "",
+      companyName: draft.form.companyName,
+      roleTitle: draft.form.roleTitle,
+      recipientName: draft.form.recipientName,
+      tone: draft.form.tone,
+      length: draft.form.length,
+      extraContext: "",
+      useAiGeneratedContent: draft.form.useAiGeneratedContent,
+    }));
+    setResumePdf(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setResult(draftToResult(draft));
+    setActiveDraftId(draft.id);
+    setError("");
+    setHistoryOpen(false);
+  };
+
+  const removeDraft = (id: string) => {
+    void history.remove(id).catch(() => {
+      // The panel displays the storage error while the current draft stays usable.
+    });
+    if (activeDraftId === id) setActiveDraftId(null);
+  };
+
+  const clearHistory = () => {
+    void history.clear().catch(() => {
+      // The panel displays the storage error while the current draft stays usable.
+    });
+    setActiveDraftId(null);
+  };
+
   const reset = () => {
+    if (editSaveTimeoutRef.current !== null) {
+      window.clearTimeout(editSaveTimeoutRef.current);
+      editSaveTimeoutRef.current = null;
+    }
     setForm(initialForm);
     setResult(null);
     setError("");
     setResumePdf(null);
+    setActiveDraftId(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -379,11 +622,15 @@ export default function Home() {
             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] transition-transform group-hover:rotate-[-6deg]"><WandSparkles size={17} /></span>
             <span><span className="block font-semibold tracking-[-0.02em]">Draftwell</span><span className="block font-mono text-[9px] uppercase tracking-[0.15em] text-[hsl(var(--muted-foreground))]">a writing partner</span></span>
           </button>
-          <StatusMark />
+          <div className="flex items-center gap-2">
+            <HistoryButton count={history.drafts.length} onClick={() => setHistoryOpen(true)} />
+            <StatusMark />
+          </div>
         </header>
         <div className="mx-auto max-w-[1440px] px-5 pb-16 sm:px-8 lg:px-12">
-          <ResultView result={result} input={form} onReset={reset} />
+          <ResultView result={result} input={form} onReset={reset} onLetterChange={handleLetterChange} onLetterBlur={handleLetterBlur} />
         </div>
+        {historyOpen && <HistoryPanel drafts={history.drafts} isLoading={history.isLoading} isAvailable={history.isAvailable} error={history.error} onClose={() => setHistoryOpen(false)} onOpenDraft={openDraft} onDeleteDraft={removeDraft} onClear={clearHistory} />}
       </main>
     );
   }
@@ -395,7 +642,10 @@ export default function Home() {
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]"><WandSparkles size={17} /></span>
           <span><span className="block font-semibold tracking-[-0.02em]">Draftwell</span><span className="block font-mono text-[9px] uppercase tracking-[0.15em] text-[hsl(var(--muted-foreground))]">a writing partner</span></span>
         </div>
-        <StatusMark />
+        <div className="flex items-center gap-2">
+          <HistoryButton count={history.drafts.length} onClick={() => setHistoryOpen(true)} />
+          <StatusMark />
+        </div>
       </header>
 
       <section className="mx-auto max-w-[1440px] px-5 pb-8 pt-10 sm:px-8 sm:pt-16 lg:px-12 lg:pb-12">
@@ -502,6 +752,7 @@ export default function Home() {
       <footer className="mx-auto flex max-w-[1440px] flex-col gap-2 border-t border-[hsl(var(--border)/0.7)] px-5 py-6 text-[10px] uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))] sm:flex-row sm:items-center sm:justify-between sm:px-8 lg:px-12">
         <span>Draftwell / 2024</span><span>Good work deserves the right words.</span>
       </footer>
+      {historyOpen && <HistoryPanel drafts={history.drafts} isLoading={history.isLoading} isAvailable={history.isAvailable} error={history.error} onClose={() => setHistoryOpen(false)} onOpenDraft={openDraft} onDeleteDraft={removeDraft} onClear={clearHistory} />}
     </main>
   );
 }
