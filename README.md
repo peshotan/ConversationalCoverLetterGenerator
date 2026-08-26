@@ -1,56 +1,57 @@
 # Conversational Cover Letter Generator
 
-Create a tailored, honest cover letter from a resume and a job description.
+An evidence-grounded writing assistant that turns a resume and job description into an editable cover letter.
 
-## Product overview
+## Run & Operate
 
-Conversational Cover Letter Generator is a focused writing assistant for job seekers. Users can paste their resume or upload a PDF, paste a job description, and generate a cover letter grounded in their actual experience.
+- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm run typecheck` — full typecheck across all packages
+- `pnpm run build` — typecheck + build all packages
+- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
+- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- Required env: `DATABASE_URL` — Postgres connection string
 
-The app is designed around a simple principle: **evidence before eloquence**. It should explain which experience was used, identify important requirements without supporting evidence, and avoid inventing qualifications.
+## Stack
 
-## Planned MVP
+- pnpm workspaces, Node.js 24, TypeScript 5.9
+- API: Express 5
+- DB: PostgreSQL + Drizzle ORM
+- Validation: Zod (`zod/v4`), `drizzle-zod`
+- API codegen: Orval (from OpenAPI spec)
+- Build: esbuild (CJS bundle)
 
-- Paste resume text or upload one PDF
-- Paste a job description
-- Optional role, company, recipient, tone, and length controls
-- Generate a tailored cover letter
-- Show evidence and missing-support insights
-- Edit the result conversationally
-- Copy or download the finished letter
-- Reset the session and clear working data
+## Where things live
 
-See [DESIGN.md](./DESIGN.md) for the product brainstorm, UX flow, requirements, technical direction, and build sequence.
+- `artifacts/conversational-cover-letter-generator/src/pages/home.tsx` — main input, generation, editing, and export experience
+- `artifacts/conversational-cover-letter-generator/src/index.css` — shared visual theme and motion
+- `artifacts/api-server/src/routes/cover-letter.ts` — resume/job-description generation endpoint
+- `lib/api-spec/openapi.yaml` — source of truth for the generation contract
+- `DESIGN.md` — product decisions, requirements, and build sequence
 
-## Why this is different
+## Architecture decisions
 
-Most cover-letter generators optimize for polished-sounding paragraphs. This app will optimize for **credible relevance**:
+- The MVP uses session-scoped client state and does not persist resumes or generated letters.
+- PDF resumes are kept in session memory and sent directly to the AI path only when the user enables AI-generated content.
+- The default generator is deterministic and evidence-based so the product remains usable without a model call.
+- The API contract is generated from OpenAPI so the frontend and server share the same request and response types.
 
-- It uses the user's supplied resume as the source of truth.
-- It maps letter sections to job requirements.
-- It flags unsupported claims instead of quietly making them up.
-- It keeps the workflow fast enough to use for every application.
+## Product
 
-## Development status
+- Paste a resume and job description or upload a PDF/text resume.
+- Set optional company, role, recipient, tone, and length details.
+- Generate an editable cover letter with evidence links and missing-evidence warnings.
+- Copy, download, or reset the current draft.
 
-Initial product design and project documentation are complete. The application implementation is next.
+## User preferences
 
-## Planned stack
+- Keep secrets and confidential data out of repositories.
+- Use feature branches and open pull requests; never push directly to the default branch.
 
-- React frontend
-- Server API for PDF extraction and AI generation
-- Schema-validated generation responses
-- Temporary, session-scoped processing for resume data
+## Gotchas
 
-The exact implementation stack may evolve as the first working flow is built.
+- The generation endpoint requires at least 80 characters for both resume and job description.
+- Artifact workflows provide `PORT` and `BASE_PATH`; do not hardcode them in the app.
 
-## Privacy direction
+## Pointers
 
-Resume and job-description content are sensitive career data. The MVP should avoid persistent storage by default, provide a clear reset action, and avoid logging raw user content.
-
-## Getting started
-
-Implementation instructions will be added once the application scaffold is created.
-
-## License
-
-License to be selected when the initial implementation is published.
+- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
