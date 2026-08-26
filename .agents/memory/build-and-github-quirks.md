@@ -14,3 +14,9 @@ GitHub connector API calls are rate-limited per Repl, so parallel blob uploads c
 **Why:** A parallel upload hit the connector's 10 requests-per-second limit before creating a repository mutation.
 
 **How to apply:** Use one tree operation where possible, and pace unavoidable GitHub API calls instead of issuing many concurrent requests.
+
+GitHub proxy publishing is more reliable when authenticated writes are split into simple sequential `proxyFetch` calls rather than one nested helper callback; verify the branch ref and pull-request head separately because PR reads can briefly lag.
+
+**Why:** A durable callback containing a nested request helper failed before the write, while direct sequential blob/tree/commit/ref calls succeeded; the first PR response also returned a stale head.
+
+**How to apply:** Confirm the remote ref before publishing, use straightforward sequential REST calls, and perform a second PR GET after updating the branch.
