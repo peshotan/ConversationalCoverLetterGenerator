@@ -1,0 +1,1 @@
+- [Build and GitHub workflow quirks](build-and-github-quirks.md) — aggregate builds and connector publishing have workflow-specific environment and rate-limit constraints.
