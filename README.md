@@ -51,7 +51,7 @@ If you are running the database commands, also set your PostgreSQL connection st
 export DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DATABASE"
 ```
 
-The current MVP keeps resumes and generated letters in session-scoped client state, so `DATABASE_URL` is not needed for the basic cover-letter writing flow.
+The basic cover-letter writing flow does not require `DATABASE_URL`. Generated letters can also be saved to the browser's native IndexedDB history, but this is local to the current browser origin and device: there are no accounts, server-side drafts, or cross-device sync.
 
 If you are running this inside Replit, provision the OpenAI AI integration or add these same variables through Secrets. Replit may provide the values automatically; never print or commit the secret value.
 
@@ -132,7 +132,8 @@ pnpm --filter @workspace/api-spec run codegen
 
 ## Architecture decisions
 
-- The MVP uses session-scoped client state and does not persist resumes or generated letters.
+- Resume text, job descriptions, uploaded PDFs, and credentials are kept out of local history. Generated letters and safe display metadata are saved in versioned browser-local IndexedDB records.
+- Local history is scoped to the browser origin and device. It is not an account backup, is not sent to the server, and may be unavailable when browser storage is blocked or disabled. The app remains usable without it.
 - PDF resumes are kept in session memory and sent directly to the AI path only when the user enables AI-generated content.
 - The default generator is deterministic and evidence-based so the product remains usable without a model call.
 - The API contract is generated from OpenAPI so the frontend and server share the same request and response types.
@@ -142,6 +143,7 @@ pnpm --filter @workspace/api-spec run codegen
 - Paste a resume and job description or upload a PDF/text resume.
 - Set optional company, role, recipient, tone, and length details.
 - Generate an editable cover letter with evidence links and missing-evidence warnings.
+- Reopen, edit, delete, or clear generated drafts from the local History panel without regenerating them.
 - Copy, download, or reset the current draft.
 
 ## User preferences
@@ -153,6 +155,7 @@ pnpm --filter @workspace/api-spec run codegen
 
 - The generation endpoint requires at least 80 characters for both resume and job description.
 - Artifact workflows provide `PORT` and `BASE_PATH`; do not hardcode them in the app.
+- Browser history storage is best-effort. If IndexedDB is unavailable, generation and exports still work, but drafts cannot be saved.
 
 ## Pointers
 
