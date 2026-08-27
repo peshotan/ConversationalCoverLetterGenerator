@@ -1,3 +1,195 @@
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import {
+  ArrowDownToLine,
+  ArrowRight,
+  Check,
+  CheckCircle2,
+  Clipboard,
+  Clock3,
+  FileText,
+  History,
+  Info,
+  LoaderCircle,
+  RotateCcw,
+  Sparkles,
+  Trash2,
+  Upload,
+  WandSparkles,
+  X,
+  AlertTriangle,
+} from "lucide-react";
+import {
+  useGenerateCoverLetter,
+  useHealthCheck,
+  type CoverLetterInput,
+  type CoverLetterResult,
+  type CoverLetterSection,
+} from "@workspace/api-client-react";
+import { useDraftHistory } from "@/hooks/use-draft-history";
+import {
+  draftToResult,
+  serializeDraftHistory,
+  serializeDraft,
+  type DraftFormMetadata,
+  type DraftHistoryImportResult,
+  type DraftRecord,
+} from "@/lib/draft-history";
+import { downloadCoverLetter, type LetterDownloadFormat } from "@/lib/letter-export";
+
+type FormState = {
+  resumeText: string;
+  jobDescription: string;
+  companyName: string;
+  roleTitle: string;
+  recipientName: string;
+  tone: NonNullable<CoverLetterInput["tone"]>;
+  length: NonNullable<CoverLetterInput["length"]>;
+  extraContext: string;
+  useAiGeneratedContent: boolean;
+};
+
+const initialForm: FormState = {
+  resumeText: "",
+  jobDescription: "",
+  companyName: "",
+  roleTitle: "",
+  recipientName: "",
+  tone: "warm",
+  length: "standard",
+  extraContext: "",
+  useAiGeneratedContent: false,
+};
+
+const MAX_RESUME_PDF_BYTES = 8 * 1024 * 1024;
+
+type ResumePdf = {
+  base64: string;
+  fileName: string;
+};
+
+const toneOptions: Array<{ value: FormState["tone"]; label: string; description: string }> = [
+  { value: "warm", label: "Warm", description: "Human and thoughtful" },
+  { value: "professional", label: "Professional", description: "Polished and measured" },
+  { value: "confident", label: "Confident", description: "Clear and assured" },
+  { value: "direct", label: "Direct", description: "Lean and purposeful" },
+];
+
+const lengthOptions: Array<{ value: FormState["length"]; label: string; detail: string }> = [
+  { value: "concise", label: "Concise", detail: "2–3 paragraphs" },
+  { value: "standard", label: "Standard", detail: "3–4 paragraphs" },
+  { value: "detailed", label: "Detailed", detail: "4–5 paragraphs" },
+];
+
+function countWords(value: string) {
+  return value.trim() ? value.trim().split(/\s+/).length : 0;
+}
+
+async function readPdfAsBase64(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const chunks: string[] = [];
+
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(index, index + 0x8000)));
+  }
+
+  return btoa(chunks.join(""));
+}
+
+function sectionTitle(name: CoverLetterSection["name"]) {
+  if (name === "opening") return "Opening";
+  if (name === "evidence") return "Relevant evidence";
+  return "Closing";
+}
+
+function formatError(error: unknown) {
+  const possibleError = error as { response?: { data?: { error?: string } }; message?: string };
+  return possibleError.response?.data?.error || possibleError.message || "Something got in the way. Please try again.";
+}
+
+function StatusMark() {
+  const health = useHealthCheck();
+  const isOnline = health.isSuccess && health.data?.status === "ok";
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.74)] px-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))]" data-testid="status-service">
+      <span className={`h-1.5 w-1.5 rounded-full ${isOnline ? "bg-[hsl(var(--accent-foreground))]" : health.isLoading ? "bg-[hsl(var(--muted-foreground))] animate-pulse" : "bg-[hsl(var(--destructive))]"}`} />
+      {isOnline ? "Writing desk is ready" : health.isLoading ? "Checking desk" : "Desk needs attention"}
+    </div>
+  );
+}
+
+function FieldLabel({ htmlFor, children, optional = false }: { htmlFor: string; children: string; optional?: boolean }) {
+  return (
+    <label htmlFor={htmlFor} className="mb-2 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]">
+      <span>{children}</span>
+      {optional && <span className="font-normal normal-case tracking-normal text-[hsl(var(--muted-foreground)/0.76)]">Optional</span>}
+    </label>
+  );
+}
+
+function TextCount({ value, minimum }: { value: string; minimum: number }) {
+  const count = countWords(value);
+  const isEnough = value.trim().length >= minimum;
+  return (
+    <span className={`font-mono text-[10px] ${isEnough ? "text-[hsl(var(--accent-foreground))]" : "text-[hsl(var(--muted-foreground))]"}`} data-testid="text-word-count">
+      {count} words {minimum > 0 && <span className="ml-1 opacity-70">/ {minimum} chars min</span>}
+    </span>
+  );
+}
+
+function HistoryButton({ count, onClick }: { count: number; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="relative inline-flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.76)] px-3.5 py-2 text-sm font-semibold text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--secondary))]"
+      data-testid="button-open-history"
+    >
+      <History size={15} />
+      History
+      {count > 0 && (
+        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[hsl(var(--accent))] px-1.5 font-mono text-[10px] text-[hsl(var(--accent-foreground))]" data-testid="text-history-count">
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function formatHistoryDate(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
+}
+
+function HistoryPanel({
+  drafts,
+  isLoading,
+  isAvailable,
+  error,
+  onClose,
+  onOpenDraft,
+  onDeleteDraft,
+  onClear,
+  onImport,
+}: {
+  drafts: DraftRecord[];
+  isLoading: boolean;
+  isAvailable: boolean;
+  error: string;
+  onClose: () => void;
+  onOpenDraft: (draft: DraftRecord) => void;
+  onDeleteDraft: (id: string) => void;
+  onClear: () => void;
+  onImport: (file: File) => Promise<DraftHistoryImportResult>;
+}) {
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [feedback, setFeedback] = useState("");
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setSelectedIds((current) => {
@@ -264,6 +456,7 @@ function ResultView({ result, input, onReset, onLetterChange, onLetterBlur }: { 
   const [letter, setLetter] = useState(result.letter);
   const [copied, setCopied] = useState(false);
   const [showSources, setShowSources] = useState(true);
+  const [downloadingFormat, setDownloadingFormat] = useState<LetterDownloadFormat | null>(null);
 
   useEffect(() => {
     setLetter(result.letter);
@@ -275,16 +468,13 @@ function ResultView({ result, input, onReset, onLetterChange, onLetterBlur }: { 
     window.setTimeout(() => setCopied(false), 1800);
   };
 
-  const handleDownload = () => {
-    const blob = new Blob([letter], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `${(input.roleTitle || "cover-letter").toLowerCase().replace(/[^a-z0-9]+/g, "-")}.txt`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
+  const handleDownload = async (format: LetterDownloadFormat) => {
+    setDownloadingFormat(format);
+    try {
+      await downloadCoverLetter(letter, input.roleTitle, format);
+    } finally {
+      setDownloadingFormat(null);
+    }
   };
 
   const evidenceCount = result.sections.reduce((total, section) => total + section.evidence.length, 0);
@@ -302,9 +492,20 @@ function ResultView({ result, input, onReset, onLetterChange, onLetterBlur }: { 
           <button type="button" onClick={handleCopy} className="inline-flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3.5 py-2 text-sm font-semibold text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--secondary))]" data-testid="button-copy-letter">
             {copied ? <Check size={15} /> : <Clipboard size={15} />} {copied ? "Copied" : "Copy"}
           </button>
-          <button type="button" onClick={handleDownload} className="inline-flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3.5 py-2 text-sm font-semibold text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--secondary))]" data-testid="button-download-letter">
-            <ArrowDownToLine size={15} /> Download .txt
-          </button>
+          <div className="flex flex-wrap gap-2" aria-label="Download cover letter">
+            {(["docx", "pdf", "txt"] as const).map((format) => (
+              <button
+                key={format}
+                type="button"
+                onClick={() => void handleDownload(format)}
+                disabled={downloadingFormat !== null}
+                className="inline-flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3.5 py-2 text-sm font-semibold uppercase transition-colors hover:bg-[hsl(var(--secondary))] disabled:cursor-wait disabled:opacity-70"
+                data-testid={`button-download-letter-${format}`}
+              >
+                <ArrowDownToLine size={15} /> {downloadingFormat === format ? "Preparing…" : `.${format}`}
+              </button>
+            ))}
+          </div>
           <button type="button" onClick={onReset} className="inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-[hsl(var(--muted-foreground))] transition-colors hover:text-[hsl(var(--foreground))]" data-testid="button-reset-top">
             <RotateCcw size={15} /> Start over
           </button>

@@ -55,7 +55,7 @@ async function replaceStoredDrafts(page: Page, drafts: DraftRecord[]) {
   );
 }
 
-async function readDownload(download: Download) {
+async function readDownloadBuffer(download: Download) {
   const stream = await download.createReadStream();
   if (!stream) throw new Error("The browser did not provide the exported backup.");
 
@@ -63,7 +63,11 @@ async function readDownload(download: Download) {
   for await (const chunk of stream) {
     chunks.push(Buffer.from(chunk));
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+async function readDownload(download: Download) {
+  return (await readDownloadBuffer(download)).toString("utf8");
 }
 
 async function expectDraftStillPresent(page: Page) {
@@ -130,4 +134,36 @@ test("exports and restores backups without changing drafts on invalid or duplica
     "Nothing new was imported. Those drafts are already in this browser.",
   );
   await expectDraftStillPresent(page);
+});
+
+test("downloads the edited cover letter as TXT, DOCX, and PDF", async ({ page }) => {
+  await page.goto("/");
+  await replaceStoredDrafts(page, [existingDraft]);
+  await page.reload();
+  await page.getByTestId("button-open-history").click();
+  await page.getByTestId("button-open-draft-browser-existing").click();
+
+  const editedLetter = "Dear hiring team,\n\nI am excited to apply.";
+  await page.getByTestId("textarea-generated-letter").fill(editedLetter);
+
+  const [txtDownload] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByTestId("button-download-letter-txt").click(),
+  ]);
+  expect(txtDownload.suggestedFilename()).toBe("product-designer.txt");
+  await expect(readDownload(txtDownload)).resolves.toBe(editedLetter);
+
+  const [docxDownload] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByTestId("button-download-letter-docx").click(),
+  ]);
+  expect(docxDownload.suggestedFilename()).toBe("product-designer.docx");
+  await expect(readDownloadBuffer(docxDownload)).resolves.toMatchObject(Buffer.from("PK\u0003\u0004"));
+
+  const [pdfDownload] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByTestId("button-download-letter-pdf").click(),
+  ]);
+  expect(pdfDownload.suggestedFilename()).toBe("product-designer.pdf");
+  await expect(readDownloadBuffer(pdfDownload)).resolves.toMatchObject(Buffer.from("%PDF"));
 });
