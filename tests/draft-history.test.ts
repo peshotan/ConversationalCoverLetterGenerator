@@ -3,9 +3,13 @@ import {
   clearDrafts,
   deleteDraft,
   DraftHistoryUnavailableError,
+  DraftHistoryImportError,
+  importDraftHistory,
   listDrafts,
+  parseDraftHistory,
   saveDraft,
   serializeDraft,
+  serializeDraftHistory,
   updateDraft,
   type DraftRecord,
 } from "../artifacts/conversational-cover-letter-generator/src/lib/draft-history";
@@ -189,6 +193,121 @@ describe("local draft history", () => {
     expect(JSON.stringify(draft)).not.toContain("resumeText");
     expect(JSON.stringify(draft)).not.toContain("jobDescription");
     expect(JSON.stringify(draft)).not.toContain("resumePdfBase64");
+  });
+
+  it("round-trips exported history with the exact draft records", () => {
+    const first = serializeDraft({
+      result,
+      letter: "First letter",
+      form,
+      id: "draft-first",
+      createdAt: 100,
+      updatedAt: 200,
+    });
+    const second = serializeDraft({
+      result,
+      letter: "Second letter",
+      form: { ...form, tone: "confident" },
+      id: "draft-second",
+      createdAt: 300,
+      updatedAt: 400,
+    });
+
+    const exported = serializeDraftHistory([first, second], 500);
+
+    expect(parseDraftHistory(exported)).toEqual([first, second]);
+    expect(JSON.parse(exported)).toEqual({
+      format: "draftwell-history",
+      version: 1,
+      exportedAt: 500,
+      drafts: [first, second],
+    });
+  });
+
+  it.each([
+    ["resume text", "resumeText", "A private resume"],
+    ["job description", "jobDescription", "A private job description"],
+    ["PDF data", "resumePdfBase64", "JVBERi0xLjQ="],
+    ["credentials", "credentials", "a secret"],
+  ])("rejects backups containing unknown %s fields", (_label, key, value) => {
+    const draft = serializeDraft({
+      result,
+      letter: result.letter,
+      form,
+      id: "draft-with-sensitive-field",
+      createdAt: 100,
+      updatedAt: 100,
+    });
+    const backup = JSON.parse(serializeDraftHistory([draft])) as {
+      drafts: Array<Record<string, unknown>>;
+    };
+    backup.drafts[0][key] = value;
+
+    expect(() => parseDraftHistory(JSON.stringify(backup))).toThrow(DraftHistoryImportError);
+  });
+
+  it("does not change stored drafts when importing a malformed backup", async () => {
+    const existing = serializeDraft({
+      result,
+      letter: "Keep this letter",
+      form,
+      id: "draft-existing",
+      createdAt: 100,
+      updatedAt: 100,
+    });
+    await saveDraft(existing);
+
+    const malformed = JSON.parse(serializeDraftHistory([existing])) as {
+      drafts: Array<Record<string, unknown>>;
+    };
+    malformed.drafts[0].jobDescription = "Do not store this";
+
+    await expect(importDraftHistory(JSON.stringify(malformed))).rejects.toBeInstanceOf(DraftHistoryImportError);
+    expect(await listDrafts()).toEqual([existing]);
+  });
+
+  it("skips existing and duplicate imported IDs without overwriting stored drafts", async () => {
+    const existing = serializeDraft({
+      result,
+      letter: "Original stored letter",
+      form,
+      id: "draft-existing",
+      createdAt: 100,
+      updatedAt: 100,
+    });
+    const imported = serializeDraft({
+      result,
+      letter: "First imported letter",
+      form,
+      id: "draft-new",
+      createdAt: 200,
+      updatedAt: 200,
+    });
+    const duplicateExisting = serializeDraft({
+      result,
+      letter: "Replacement must be ignored",
+      form,
+      id: "draft-existing",
+      createdAt: 300,
+      updatedAt: 300,
+    });
+    const duplicateImported = serializeDraft({
+      result,
+      letter: "Duplicate imported letter must be ignored",
+      form,
+      id: "draft-new",
+      createdAt: 400,
+      updatedAt: 400,
+    });
+    await saveDraft(existing);
+
+    const outcome = await importDraftHistory(
+      serializeDraftHistory([duplicateExisting, imported, duplicateImported], 500),
+    );
+
+    expect(outcome.imported).toEqual([imported]);
+    expect(outcome.skipped).toEqual([duplicateExisting, duplicateImported]);
+    expect(await listDrafts()).toEqual([imported, existing]);
   });
 
   it("supports saving, listing, editing, deleting, and clearing drafts", async () => {

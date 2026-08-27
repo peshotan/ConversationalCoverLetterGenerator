@@ -1,193 +1,122 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import {
-  ArrowDownToLine,
-  ArrowRight,
-  Check,
-  CheckCircle2,
-  Clipboard,
-  Clock3,
-  FileText,
-  History,
-  Info,
-  LoaderCircle,
-  RotateCcw,
-  Sparkles,
-  Trash2,
-  Upload,
-  WandSparkles,
-  X,
-  AlertTriangle,
-} from "lucide-react";
-import {
-  useGenerateCoverLetter,
-  useHealthCheck,
-  type CoverLetterInput,
-  type CoverLetterResult,
-  type CoverLetterSection,
-} from "@workspace/api-client-react";
-import { useDraftHistory } from "@/hooks/use-draft-history";
-import {
-  draftToResult,
-  serializeDraft,
-  type DraftFormMetadata,
-  type DraftRecord,
-} from "@/lib/draft-history";
 
-type FormState = {
-  resumeText: string;
-  jobDescription: string;
-  companyName: string;
-  roleTitle: string;
-  recipientName: string;
-  tone: NonNullable<CoverLetterInput["tone"]>;
-  length: NonNullable<CoverLetterInput["length"]>;
-  extraContext: string;
-  useAiGeneratedContent: boolean;
-};
+  useEffect(() => {
+    setSelectedIds((current) => {
+      const availableIds = new Set(drafts.map((draft) => draft.id));
+      const next = new Set([...current].filter((id) => availableIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [drafts]);
 
-const initialForm: FormState = {
-  resumeText: "",
-  jobDescription: "",
-  companyName: "",
-  roleTitle: "",
-  recipientName: "",
-  tone: "warm",
-  length: "standard",
-  extraContext: "",
-  useAiGeneratedContent: false,
-};
+  const selectedDrafts = drafts.filter((draft) => selectedIds.has(draft.id));
+  const allSelected = drafts.length > 0 && selectedDrafts.length === drafts.length;
 
-const MAX_RESUME_PDF_BYTES = 8 * 1024 * 1024;
+  const toggleSelected = (id: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
-type ResumePdf = {
-  base64: string;
-  fileName: string;
-};
+  const handleExport = (records: DraftRecord[]) => {
+    if (records.length === 0) return;
+    try {
+      const blob = new Blob([serializeDraftHistory(records)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `draftwell-history-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setFeedback(`${records.length} ${records.length === 1 ? "draft" : "drafts"} exported.`);
+    } catch (exportError) {
+      setFeedback(exportError instanceof Error ? exportError.message : "The drafts could not be exported.");
+    }
+  };
 
-const toneOptions: Array<{ value: FormState["tone"]; label: string; description: string }> = [
-  { value: "warm", label: "Warm", description: "Human and thoughtful" },
-  { value: "professional", label: "Professional", description: "Polished and measured" },
-  { value: "confident", label: "Confident", description: "Clear and assured" },
-  { value: "direct", label: "Direct", description: "Lean and purposeful" },
-];
+  const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
 
-const lengthOptions: Array<{ value: FormState["length"]; label: string; detail: string }> = [
-  { value: "concise", label: "Concise", detail: "2–3 paragraphs" },
-  { value: "standard", label: "Standard", detail: "3–4 paragraphs" },
-  { value: "detailed", label: "Detailed", detail: "4–5 paragraphs" },
-];
+    try {
+      const result = await onImport(file);
+      setSelectedIds(new Set(result.imported.map((draft) => draft.id)));
+      setFeedback(
+        result.imported.length > 0
+          ? `${result.imported.length} ${result.imported.length === 1 ? "draft" : "drafts"} imported${result.skipped.length > 0 ? `; ${result.skipped.length} already existed` : ""}.`
+          : "Nothing new was imported. Those drafts are already in this browser.",
+      );
+    } catch (importError) {
+      setFeedback(importError instanceof Error ? importError.message : "The history file could not be imported.");
+    }
+  };
 
-function countWords(value: string) {
-  return value.trim() ? value.trim().split(/\s+/).length : 0;
-}
-
-async function readPdfAsBase64(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  const chunks: string[] = [];
-
-  for (let index = 0; index < bytes.length; index += 0x8000) {
-    chunks.push(String.fromCharCode(...bytes.subarray(index, index + 0x8000)));
-  }
-
-  return btoa(chunks.join(""));
-}
-
-function sectionTitle(name: CoverLetterSection["name"]) {
-  if (name === "opening") return "Opening";
-  if (name === "evidence") return "Relevant evidence";
-  return "Closing";
-}
-
-function formatError(error: unknown) {
-  const possibleError = error as { response?: { data?: { error?: string } }; message?: string };
-  return possibleError.response?.data?.error || possibleError.message || "Something got in the way. Please try again.";
-}
-
-function StatusMark() {
-  const health = useHealthCheck();
-  const isOnline = health.isSuccess && health.data?.status === "ok";
-  return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.74)] px-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))]" data-testid="status-service">
-      <span className={`h-1.5 w-1.5 rounded-full ${isOnline ? "bg-[hsl(var(--accent-foreground))]" : health.isLoading ? "bg-[hsl(var(--muted-foreground))] animate-pulse" : "bg-[hsl(var(--destructive))]"}`} />
-      {isOnline ? "Writing desk is ready" : health.isLoading ? "Checking desk" : "Desk needs attention"}
+  const historyTools = (
+    <div className="mt-5 space-y-3 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--secondary)/0.35)] p-3.5" data-testid="panel-history-tools">
+      <input ref={importInputRef} type="file" accept=".json,application/json" onChange={handleImport} className="hidden" data-testid="input-import-history" />
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => importInputRef.current?.click()}
+          disabled={!isAvailable || isLoading}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs font-semibold transition-colors hover:bg-[hsl(var(--secondary))] disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="button-import-history"
+        >
+          <Upload size={14} /> Import backup
+        </button>
+        {drafts.length > 0 && (
+          <>
+            <button
+              type="button"
+              onClick={() => setSelectedIds(allSelected ? new Set() : new Set(drafts.map((draft) => draft.id)))}
+              className="rounded-lg px-2 py-2 text-xs font-semibold text-[hsl(var(--primary))] hover:underline"
+              data-testid="button-toggle-select-all"
+            >
+              {allSelected ? "Clear selection" : "Select all"}
+            </button>
+            <span className="ml-auto font-mono text-[10px] uppercase tracking-[0.08em] text-[hsl(var(--muted-foreground))]">
+              {selectedDrafts.length} selected
+            </span>
+          </>
+        )}
+      </div>
+      {drafts.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => handleExport(selectedDrafts)}
+            disabled={selectedDrafts.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-2 text-xs font-semibold text-[hsl(var(--primary-foreground))] transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            data-testid="button-export-selected"
+          >
+            <ArrowDownToLine size={14} /> Export selected
+          </button>
+          <button
+            type="button"
+            onClick={() => handleExport(drafts)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs font-semibold transition-colors hover:bg-[hsl(var(--secondary))]"
+            data-testid="button-export-all"
+          >
+            <ArrowDownToLine size={14} /> Export all ({drafts.length})
+          </button>
+        </div>
+      )}
+      <p className="text-[11px] leading-5 text-[hsl(var(--muted-foreground))]">Backups contain your generated letters and display details only — never resumes, job descriptions, PDFs, or credentials.</p>
+      {feedback && <p className="text-xs font-medium text-[hsl(var(--accent-foreground))]" role="status" data-testid="status-history-transfer">{feedback}</p>}
     </div>
   );
-}
 
-function FieldLabel({ htmlFor, children, optional = false }: { htmlFor: string; children: string; optional?: boolean }) {
-  return (
-    <label htmlFor={htmlFor} className="mb-2 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]">
-      <span>{children}</span>
-      {optional && <span className="font-normal normal-case tracking-normal text-[hsl(var(--muted-foreground)/0.76)]">Optional</span>}
-    </label>
-  );
-}
-
-function TextCount({ value, minimum }: { value: string; minimum: number }) {
-  const count = countWords(value);
-  const isEnough = value.trim().length >= minimum;
-  return (
-    <span className={`font-mono text-[10px] ${isEnough ? "text-[hsl(var(--accent-foreground))]" : "text-[hsl(var(--muted-foreground))]"}`} data-testid="text-word-count">
-      {count} words {minimum > 0 && <span className="ml-1 opacity-70">/ {minimum} chars min</span>}
-    </span>
-  );
-}
-
-function HistoryButton({ count, onClick }: { count: number; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="relative inline-flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.76)] px-3.5 py-2 text-sm font-semibold text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--secondary))]"
-      data-testid="button-open-history"
-    >
-      <History size={15} />
-      History
-      {count > 0 && (
-        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[hsl(var(--accent))] px-1.5 font-mono text-[10px] text-[hsl(var(--accent-foreground))]" data-testid="text-history-count">
-          {count}
-        </span>
-      )}
-    </button>
-  );
-}
-
-function formatHistoryDate(timestamp: number) {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(timestamp));
-}
-
-function HistoryPanel({
-  drafts,
-  isLoading,
-  isAvailable,
-  error,
-  onClose,
-  onOpenDraft,
-  onDeleteDraft,
-  onClear,
-}: {
-  drafts: DraftRecord[];
-  isLoading: boolean;
-  isAvailable: boolean;
-  error: string;
-  onClose: () => void;
-  onOpenDraft: (draft: DraftRecord) => void;
-  onDeleteDraft: (id: string) => void;
-  onClear: () => void;
-}) {
   if (!isAvailable || isLoading || drafts.length === 0) {
     return (
       <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-labelledby="history-title">
         <button type="button" className="absolute inset-0 cursor-default bg-[hsl(var(--foreground)/0.2)]" onClick={onClose} aria-label="Close history" />
         <aside className="relative flex h-full w-full max-w-md flex-col border-l border-[hsl(var(--border))] bg-[hsl(var(--background))] p-5 shadow-2xl sm:p-7">
           <HistoryPanelHeader onClose={onClose} onClear={onClear} hasDrafts={drafts.length > 0} />
+          {historyTools}
           {isLoading ? (
             <div className="flex flex-1 items-center justify-center text-sm text-[hsl(var(--muted-foreground))]" data-testid="status-history-loading">
               Loading your local drafts…
@@ -222,14 +151,25 @@ function HistoryPanel({
       <button type="button" className="absolute inset-0 cursor-default bg-[hsl(var(--foreground)/0.2)]" onClick={onClose} aria-label="Close history" />
       <aside className="relative flex h-full w-full max-w-md flex-col border-l border-[hsl(var(--border))] bg-[hsl(var(--background))] p-5 shadow-2xl sm:p-7">
         <HistoryPanelHeader onClose={onClose} onClear={onClear} hasDrafts />
+        {historyTools}
         <div className="mt-6 flex-1 space-y-3 overflow-y-auto pr-1" data-testid="list-history-drafts">
           {drafts.map((draft) => (
             <div key={draft.id} className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.8)] p-4 transition-colors hover:bg-[hsl(var(--secondary)/0.5)]">
               <div className="flex items-start justify-between gap-3">
-                <button type="button" onClick={() => onOpenDraft(draft)} className="min-w-0 flex-1 text-left" data-testid={`button-open-draft-${draft.id}`}>
-                  <span className="block truncate font-serif text-2xl text-[hsl(var(--foreground))]">{draft.form.roleTitle || "Untitled role"}</span>
-                  <span className="mt-1 block truncate text-sm text-[hsl(var(--muted-foreground))]">{draft.form.companyName || "No company specified"}</span>
-                </button>
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(draft.id)}
+                    onChange={() => toggleSelected(draft.id)}
+                    className="mt-1.5 h-4 w-4 shrink-0 accent-[hsl(var(--primary))]"
+                    aria-label={`Select ${draft.form.roleTitle || "untitled"} draft`}
+                    data-testid={`checkbox-select-draft-${draft.id}`}
+                  />
+                  <button type="button" onClick={() => onOpenDraft(draft)} className="min-w-0 flex-1 text-left" data-testid={`button-open-draft-${draft.id}`}>
+                    <span className="block truncate font-serif text-2xl text-[hsl(var(--foreground))]">{draft.form.roleTitle || "Untitled role"}</span>
+                    <span className="mt-1 block truncate text-sm text-[hsl(var(--muted-foreground))]">{draft.form.companyName || "No company specified"}</span>
+                  </button>
+                </div>
                 <button type="button" onClick={() => onDeleteDraft(draft.id)} className="rounded-lg p-2 text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--destructive)/0.1)] hover:text-[hsl(var(--destructive))]" aria-label={`Delete ${draft.form.roleTitle || "untitled"} draft`} data-testid={`button-delete-draft-${draft.id}`}>
                   <Trash2 size={15} />
                 </button>
@@ -601,6 +541,8 @@ export default function Home() {
     setActiveDraftId(null);
   };
 
+  const importHistory = async (file: File) => history.importHistory(await file.text());
+
   const reset = () => {
     if (editSaveTimeoutRef.current !== null) {
       window.clearTimeout(editSaveTimeoutRef.current);
@@ -630,7 +572,7 @@ export default function Home() {
         <div className="mx-auto max-w-[1440px] px-5 pb-16 sm:px-8 lg:px-12">
           <ResultView result={result} input={form} onReset={reset} onLetterChange={handleLetterChange} onLetterBlur={handleLetterBlur} />
         </div>
-        {historyOpen && <HistoryPanel drafts={history.drafts} isLoading={history.isLoading} isAvailable={history.isAvailable} error={history.error} onClose={() => setHistoryOpen(false)} onOpenDraft={openDraft} onDeleteDraft={removeDraft} onClear={clearHistory} />}
+        {historyOpen && <HistoryPanel drafts={history.drafts} isLoading={history.isLoading} isAvailable={history.isAvailable} error={history.error} onClose={() => setHistoryOpen(false)} onOpenDraft={openDraft} onDeleteDraft={removeDraft} onClear={clearHistory} onImport={importHistory} />}
       </main>
     );
   }
@@ -752,7 +694,7 @@ export default function Home() {
       <footer className="mx-auto flex max-w-[1440px] flex-col gap-2 border-t border-[hsl(var(--border)/0.7)] px-5 py-6 text-[10px] uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))] sm:flex-row sm:items-center sm:justify-between sm:px-8 lg:px-12">
         <span>Draftwell / 2024</span><span>Good work deserves the right words.</span>
       </footer>
-      {historyOpen && <HistoryPanel drafts={history.drafts} isLoading={history.isLoading} isAvailable={history.isAvailable} error={history.error} onClose={() => setHistoryOpen(false)} onOpenDraft={openDraft} onDeleteDraft={removeDraft} onClear={clearHistory} />}
+      {historyOpen && <HistoryPanel drafts={history.drafts} isLoading={history.isLoading} isAvailable={history.isAvailable} error={history.error} onClose={() => setHistoryOpen(false)} onOpenDraft={openDraft} onDeleteDraft={removeDraft} onClear={clearHistory} onImport={importHistory} />}
     </main>
   );
 }

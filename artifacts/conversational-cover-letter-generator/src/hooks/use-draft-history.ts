@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   clearDrafts,
   deleteDraft,
+  importDraftHistory,
   listDrafts,
   saveDraft,
   updateDraft,
@@ -81,5 +82,22 @@ export function useDraftHistory() {
     }
   }, [refresh]);
 
-  return { drafts, isLoading, isAvailable, error, refresh, save, update, remove, clear };
+  const importHistory = useCallback(async (value: string) => {
+    try {
+      const imported = await importDraftHistory(value);
+      await refresh();
+      setIsAvailable(true);
+      setError("");
+      return imported;
+    } catch (historyError) {
+      if (historyError instanceof Error && historyError.name === "DraftHistoryImportError") {
+        throw historyError;
+      }
+      setIsAvailable(false);
+      setError(historyError instanceof Error ? historyError.message : "Local draft history is unavailable.");
+      throw historyError;
+    }
+  }, [refresh]);
+
+  return { drafts, isLoading, isAvailable, error, refresh, save, update, remove, clear, importHistory };
 }
